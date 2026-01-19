@@ -104,7 +104,8 @@ export function MintOnetime() {
 			const walletAddress = await wallet.getChangeAddress();
 			tx.setRequiredSigners([walletAddress]);
 
-			tx.sendValue(walletAddress, targetUtxo);
+			// Consume the required UTXO as an input (required by the Plutus validator)
+			tx.setTxInputs([targetUtxo]);
 
 			tx.mintAsset(
 				policyScript,
@@ -116,6 +117,15 @@ export function MintOnetime() {
 					data: 'd87980',
 				},
 			);
+
+			// Send the minted token to the wallet (so it shows up in your wallet!)
+			const finalPolicyIdForAsset = calculatedPolicyId || policyId;
+			tx.sendAssets(walletAddress, [
+				{
+					unit: finalPolicyIdForAsset + assetName,
+					quantity: '1',
+				},
+			]);
 
 			setStatus('Signing transaction...');
 			const unsignedTx = await tx.build();
@@ -169,8 +179,8 @@ export function MintOnetime() {
 							status.includes('Error')
 								? 'bg-red-900/20 border border-red-500/30 text-red-200'
 								: status.includes('Success')
-								? 'bg-green-900/20 border border-green-500/30 text-green-200'
-								: 'bg-black/50 border border-gold/20 text-ivory/80'
+									? 'bg-green-900/20 border border-green-500/30 text-green-200'
+									: 'bg-black/50 border border-gold/20 text-ivory/80'
 						}`}>
 						{status}
 					</div>

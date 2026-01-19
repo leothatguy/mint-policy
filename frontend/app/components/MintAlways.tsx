@@ -49,6 +49,7 @@ export function MintAlways() {
 			setStatus('Selecting collateral...');
 
 			const utxos = await wallet.getUtxos();
+			// Collateral MUST be pure ADA only (Cardano blockchain rule)
 			const collateralUtxo = utxos.find((utxo: any) => {
 				const adaAmount = utxo.output?.amount?.find((a: any) => a.unit === 'lovelace')?.quantity || '0';
 				const adaValue = parseInt(adaAmount);
@@ -61,7 +62,7 @@ export function MintAlways() {
 
 			if (!collateralUtxo) {
 				setStatus(
-					'Error: No suitable UTXO found for collateral. You need at least 2 ADA in a UTXO with no other tokens.',
+					'Error: No pure ADA UTXO found for collateral. Send 5 ADA to yourself to create a UTXO with no tokens, then try again.',
 				);
 				setLoading(false);
 				return;
@@ -141,8 +142,8 @@ export function MintAlways() {
 							status.includes('Error')
 								? 'bg-red-900/20 border border-red-500/30 text-red-200'
 								: status.includes('Success')
-								? 'bg-green-900/20 border border-green-500/30 text-green-200'
-								: 'bg-black/50 border border-gold/20 text-ivory/80'
+									? 'bg-green-900/20 border border-green-500/30 text-green-200'
+									: 'bg-black/50 border border-gold/20 text-ivory/80'
 						}`}>
 						{status}
 					</div>

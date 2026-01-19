@@ -48,15 +48,20 @@ export function MintFenix() {
 			setStatus('Checking for required tokens...');
 
 			const assets = await wallet.getAssets();
-			const alwaysAsset = assets.find(
-				(asset: any) => asset.unit === `${finalPolicyId}${Buffer.from(ASSET_NAMES.ALWAYS, 'utf8').toString('hex')}`,
-			);
-			const onetimeAsset = assets.find(
-				(asset: any) => asset.unit === `${finalPolicyId}${Buffer.from(ASSET_NAMES.ONETIME, 'utf8').toString('hex')}`,
-			);
+
+			const alwaysHex = Buffer.from(ASSET_NAMES.ALWAYS, 'utf8').toString('hex');
+			const onetimeHex = Buffer.from(ASSET_NAMES.ONETIME, 'utf8').toString('hex');
+
+			const alwaysAsset = assets.find((asset: any) => asset.unit.endsWith(alwaysHex));
+			const onetimeAsset = assets.find((asset: any) => asset.unit.endsWith(onetimeHex));
 
 			if (!alwaysAsset || !onetimeAsset) {
-				setStatus('Error: You must have both "always" and "onetime" tokens in your wallet to mint "fenix".');
+				const missingTokens = [];
+				if (!alwaysAsset) missingTokens.push('"always"');
+				if (!onetimeAsset) missingTokens.push('"onetime"');
+				setStatus(
+					`Error: Missing required tokens: ${missingTokens.join(' and ')}. You need both tokens in your wallet.`,
+				);
 				setLoading(false);
 				return;
 			}
@@ -67,22 +72,15 @@ export function MintFenix() {
 				return;
 			}
 
+			const alwaysPolicyId = alwaysAsset.unit.slice(0, -alwaysHex.length);
+			const onetimePolicyId = onetimeAsset.unit.slice(0, -onetimeHex.length);
+
 			setStatus('Selecting collateral...');
 
-			const utxos = await wallet.getUtxos();
-			const collateralUtxo = utxos.find((utxo: any) => {
-				const adaAmount = utxo.output?.amount?.find((a: any) => a.unit === 'lovelace')?.quantity || '0';
-				const adaValue = parseInt(adaAmount);
-				const hasOnlyAda =
-					!utxo.output?.amount ||
-					utxo.output.amount.length === 1 ||
-					utxo.output.amount.every((a: any) => a.unit === 'lovelace');
-				return hasOnlyAda && adaValue >= 2000000;
-			});
-
-			if (!collateralUtxo) {
+			const collateral = await wallet.getCollateral();
+			if (!collateral || collateral.length === 0) {
 				setStatus(
-					'Error: No suitable UTXO found for collateral. You need at least 2 ADA in a UTXO with no other tokens.',
+					'Error: No collateral available. Your wallet needs to set up collateral UTXOs. Please check your wallet settings.',
 				);
 				setLoading(false);
 				return;
@@ -90,10 +88,30 @@ export function MintFenix() {
 
 			setStatus('Building transaction...');
 
-			const assetName = ASSET_NAMES.FENIX;
+			const utxos = await wallet.getUtxos();
+
+			const alwaysUtxo = utxos.find((utxo: any) => {
+				return utxo.output?.amount?.some((a: any) => a.unit === alwaysAsset.unit);
+			});
+
+			const onetimeUtxo = utxos.find((utxo: any) => {
+				return utxo.output?.amount?.some((a: any) => a.unit === onetimeAsset.unit);
+			});
+
+			if (!alwaysUtxo || !onetimeUtxo) {
+				setStatus('Error: Could not find UTXOs containing the tokens to burn.');
+				setLoading(false);
+				return;
+			}
+
+			setStatus('Building transaction...');
+
 			const tx = new Transaction({ initiator: wallet });
 
-			tx.setCollateral([collateralUtxo]);
+			tx.setCollateral(collateral);
+
+			const walletAddress = await wallet.getChangeAddress();
+			tx.setRequiredSigners([walletAddress]);
 
 			tx.mintAsset(
 				policyScript,
@@ -120,7 +138,7 @@ export function MintFenix() {
 			tx.mintAsset(
 				policyScript,
 				{
-					assetName: assetName,
+					assetName: ASSET_NAMES.FENIX,
 					assetQuantity: '1',
 				},
 				{
@@ -180,8 +198,8 @@ export function MintFenix() {
 							status.includes('Error')
 								? 'bg-red-900/20 border border-red-500/30 text-red-200'
 								: status.includes('Success')
-								? 'bg-green-900/20 border border-green-500/30 text-green-200'
-								: 'bg-black/50 border border-gold/20 text-ivory/80'
+									? 'bg-green-900/20 border border-green-500/30 text-green-200'
+									: 'bg-black/50 border border-gold/20 text-ivory/80'
 						}`}>
 						{status}
 					</div>
