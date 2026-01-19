@@ -10,7 +10,8 @@ export const MINTING_CONFIG = {
 
 	network: process.env.NEXT_PUBLIC_NETWORK || 'preprod',
 
-	blockfrostKey: process.env.NEXT_PUBLIC_BLOCKFROST_KEY || '',
+	blockfrostKey: process.env.NEXT_PUBLIC_BLOCKFROST_API_KEY || '',
+	blockfrostUrl: process.env.NEXT_PUBLIC_BLOCKFROST_URL || 'https://cardano-preview.blockfrost.io/api/v0',
 
 	unparameterizedScript: '',
 };

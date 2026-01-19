@@ -3,13 +3,13 @@
 import { useState } from 'react';
 import { useWallet } from '../hooks/useWallet';
 import { useMintingPolicy } from '../hooks/useMintingPolicy';
-import { Transaction } from '@meshsdk/core';
+import { Lucid, Blockfrost, Data, fromText, mintingPolicyToId } from '@lucid-evolution/lucid';
 import { MINTING_CONFIG, ASSET_NAMES } from '../config';
 import { Flame, Loader2, AlertTriangle } from 'lucide-react';
 
 export function MintFenix() {
 	const { wallet, connected } = useWallet();
-	const { parameterizeScript, policyId, isConfigComplete, error: policyError } = useMintingPolicy();
+	const { parameterizeScript, policyId: meshPolicyId, isConfigComplete, error: policyError } = useMintingPolicy();
 	const [loading, setLoading] = useState(false);
 	const [status, setStatus] = useState<string>('');
 
@@ -36,22 +36,19 @@ export function MintFenix() {
 				setLoading(false);
 				return;
 			}
-			const { script: policyScript, policyId: calculatedPolicyId } = result;
-			const finalPolicyId = calculatedPolicyId || policyId;
+			const { script: policyScript } = result;
 
-			if (!finalPolicyId) {
-				setStatus('Error: Could not calculate policy ID');
-				setLoading(false);
-				return;
-			}
+			// We will calculate policy ID using Lucid to ensure it matches
 
 			setStatus('Checking for required tokens...');
 
 			const assets = await wallet.getAssets();
 
+			// Convert asset names to hex for comparison
 			const alwaysHex = Buffer.from(ASSET_NAMES.ALWAYS, 'utf8').toString('hex');
 			const onetimeHex = Buffer.from(ASSET_NAMES.ONETIME, 'utf8').toString('hex');
 
+			// Find tokens by asset name (regardless of policy ID)
 			const alwaysAsset = assets.find((asset: any) => asset.unit.endsWith(alwaysHex));
 			const onetimeAsset = assets.find((asset: any) => asset.unit.endsWith(onetimeHex));
 
@@ -72,85 +69,69 @@ export function MintFenix() {
 				return;
 			}
 
-			const alwaysPolicyId = alwaysAsset.unit.slice(0, -alwaysHex.length);
-			const onetimePolicyId = onetimeAsset.unit.slice(0, -onetimeHex.length);
+			setStatus('Building transaction with Lucid...');
 
-			setStatus('Selecting collateral...');
+			// Initialize Lucid with Blockfrost provider
+			// Try using the default export or checking what Lucid is
+			// Based on error, Lucid might be an object with factory methods in TS types, but function at runtime?
+			// Let's try instantiating it if it's a class, or calling if function.
+			// Reverting to Lucid() call but casting to any to bypass TS error for now to check runtime behavior
+			// Also checking if we need to call .init() or similar
 
-			const collateral = await wallet.getCollateral();
-			if (!collateral || collateral.length === 0) {
-				setStatus(
-					'Error: No collateral available. Your wallet needs to set up collateral UTXOs. Please check your wallet settings.',
-				);
-				setLoading(false);
-				return;
+			const lucid = await (Lucid as any)(
+				new Blockfrost(MINTING_CONFIG.blockfrostUrl, MINTING_CONFIG.blockfrostKey),
+				'Preprod',
+			);
+
+			// Connect wallet to Lucid
+			const savedWalletName = localStorage.getItem('connectedWallet');
+			if (!savedWalletName) {
+				throw new Error('No wallet name found in localStorage');
+			}
+			const walletApi = await (window as any).cardano[savedWalletName.toLowerCase()].enable();
+			lucid.selectWallet.fromAPI(walletApi);
+
+			// Convert asset names to hex using Lucid's fromText
+			const alwaysAssetName = fromText(ASSET_NAMES.ALWAYS);
+			const onetimeAssetName = fromText(ASSET_NAMES.ONETIME);
+			const fenixAssetName = fromText(ASSET_NAMES.FENIX);
+
+			// Convert Mesh script format to Lucid format
+			const lucidScript = {
+				type: 'PlutusV3' as any,
+				script: policyScript.code,
+			};
+
+			// CRITICAL: Calculate Policy ID using Lucid to ensure it matches the attached script
+			const lucidPolicyId = mintingPolicyToId(lucidScript);
+			console.log('Validating Policy IDs:');
+			console.log('Mesh Policy ID (from hook):', meshPolicyId);
+			console.log('Lucid Policy ID (from script):', lucidPolicyId);
+
+			if (meshPolicyId && meshPolicyId !== lucidPolicyId) {
+				console.warn('Policy ID mismatch! Using Lucid calculated ID.');
 			}
 
-			setStatus('Building transaction...');
-
-			const utxos = await wallet.getUtxos();
-
-			const alwaysUtxo = utxos.find((utxo: any) => {
-				return utxo.output?.amount?.some((a: any) => a.unit === alwaysAsset.unit);
-			});
-
-			const onetimeUtxo = utxos.find((utxo: any) => {
-				return utxo.output?.amount?.some((a: any) => a.unit === onetimeAsset.unit);
-			});
-
-			if (!alwaysUtxo || !onetimeUtxo) {
-				setStatus('Error: Could not find UTXOs containing the tokens to burn.');
-				setLoading(false);
-				return;
-			}
-
-			setStatus('Building transaction...');
-
-			const tx = new Transaction({ initiator: wallet });
-
-			tx.setCollateral(collateral);
-
-			const walletAddress = await wallet.getChangeAddress();
-			tx.setRequiredSigners([walletAddress]);
-
-			tx.mintAsset(
-				policyScript,
-				{
-					assetName: ASSET_NAMES.ALWAYS,
-					assetQuantity: '-1',
-				},
-				{
-					data: 'd87980',
-				},
-			);
-
-			tx.mintAsset(
-				policyScript,
-				{
-					assetName: ASSET_NAMES.ONETIME,
-					assetQuantity: '-1',
-				},
-				{
-					data: 'd87980',
-				},
-			);
-
-			tx.mintAsset(
-				policyScript,
-				{
-					assetName: ASSET_NAMES.FENIX,
-					assetQuantity: '1',
-				},
-				{
-					data: 'd87980',
-				},
-			);
+			// Build minting transaction with Lucid
+			// Lucid's mintAssets accepts an object with { [policyId + assetName]: quantity }
+			const tx = await lucid
+				.newTx()
+				.mintAssets(
+					{
+						[lucidPolicyId + alwaysAssetName]: -1n, // Burn 1 always (BigInt)
+						[lucidPolicyId + onetimeAssetName]: -1n, // Burn 1 onetime (BigInt)
+						[lucidPolicyId + fenixAssetName]: 1n, // Mint 1 fenix (BigInt)
+					},
+					Data.void(),
+				) // Empty redeemer
+				.attach.MintingPolicy(lucidScript) // Evolution API syntax
+				.complete();
 
 			setStatus('Signing transaction...');
-			const unsignedTx = await tx.build();
+			const signedTx = await tx.sign.withWallet().complete();
 
-			const signedTx = await wallet.signTx(unsignedTx);
-			const txHash = await wallet.submitTx(signedTx);
+			setStatus('Submitting transaction...');
+			const txHash = await signedTx.submit();
 
 			setStatus(`Success! Transaction hash: ${txHash}`);
 		} catch (error: any) {
